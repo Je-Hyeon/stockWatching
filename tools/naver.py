@@ -121,7 +121,12 @@ class NaverReportScraper:
                 except Exception as e:
                     report_text = f"PDF 추출 실패: {e}"
 
-            if report_text and not report_text.startswith("PDF 추출 실패"):
+            # 여기서 report_text가 완전히 비어있거나 공백만 있는 경우에도 summarize_report 호출을 막는다
+            if (
+                report_text
+                and not report_text.startswith("PDF 추출 실패")
+                and report_text.strip() != ""
+            ):
                 try:
                     summary = summarize_report(report_text, report_type)
                 except Exception as e:
