@@ -2,7 +2,7 @@ import time
 import os
 import requests
 import random
-from datetime import datetime
+from datetime import datetime, timedelta, date
 import numpy as np
 import pandas as pd
 import xml.etree.ElementTree as ET
@@ -73,6 +73,30 @@ class SeibroClient:
             self.collection = None
             logger.warning("MongoDB URI가 설정되지 않아 데이터베이스 저장 기능이 비활성화됩니다.")
     
+    def get_latest_date(self):
+        """DB에서 가장 최근 날짜를 조회"""
+        if self.collection is None:
+            logger.warning("MongoDB가 설정되지 않았습니다.")
+            return None
+            
+        try:
+            latest_record = self.collection.find_one(
+                {}, 
+                sort=[("DATE", -1)]
+            )
+            
+            if latest_record:
+                latest_date = latest_record["DATE"]
+                if isinstance(latest_date, str):
+                    latest_date = pd.to_datetime(latest_date).date()
+                elif hasattr(latest_date, 'date'):
+                    latest_date = latest_date.date()
+                return latest_date
+            return None
+        except Exception as e:
+            logger.error(f"최신 날짜 조회 중 오류: {e}")
+            return None
+
     def _create_payload(self, date_str: str) -> str:
         """
         API 요청용 XML 페이로드 생성
@@ -205,6 +229,51 @@ class SeibroClient:
             logger.warning("DB 확인을 건너뛰고 모든 날짜를 수집합니다.")
             return date_list
 
+    def update_data(self, days_back: int = 10):
+        """
+        최신 데이터 업데이트 (DB에 없는 날짜만 수집)
+        
+        Args:
+            days_back: DB에 데이터가 없을 때 몇 일 전부터 수집할지 (기본값: 10일)
+        """
+        logger.info("=== SEIBRO 미국 주식 정산 데이터 업데이트 시작 ===")
+        
+        # DB에서 가장 최근 날짜 조회
+        latest_date = self.get_latest_date()
+        
+        if latest_date:
+            # 다음날부터 데이터 수집 시작
+            start_date = latest_date + timedelta(days=1)
+            logger.info(f"DB 최근 날짜: {latest_date}, 수집 시작 날짜: {start_date}")
+        else:
+            # DB가 비어있으면 지정된 일수만큼 이전부터 시작
+            start_date = date.today() - timedelta(days=days_back)
+            logger.info(f"DB가 비어있습니다. {days_back}일 전부터 데이터 수집을 시작합니다.")
+
+        end_date = date.today()
+
+        # 수집할 데이터가 없으면 종료
+        if start_date > end_date:
+            logger.info("이미 최신 데이터입니다. 업데이트할 데이터가 없습니다.")
+            return
+        
+        logger.info(f"데이터 수집 기간: {start_date} ~ {end_date}")
+        
+        # 데이터 수집
+        df = self.collect_settlement_data(
+            start_date=start_date,
+            end_date=end_date,
+            save_to_db=True,
+            skip_existing=True
+        )
+        
+        if not df.empty:
+            logger.info(f"데이터 업데이트 완료: {len(df)}건")
+        else:
+            logger.info("수집된 새로운 데이터가 없습니다.")
+        
+        logger.info("=== SEIBRO 미국 주식 정산 데이터 업데이트 완료 ===")
+
     def collect_settlement_data(self, start_date: Union[str, datetime], 
                                end_date: Union[str, datetime],
                                save_to_db: bool = True,
@@ -294,6 +363,50 @@ class SeibroClient:
         
         return df
     
+    def get_data(self, start_date=None, end_date=None, limit=None):
+        """
+        DB에서 데이터 조회
+        
+        Args:
+            start_date (str): 시작 날짜 (YYYY-MM-DD 형식)
+            end_date (str): 종료 날짜 (YYYY-MM-DD 형식)
+            limit (int): 조회할 최대 레코드 수
+            
+        Returns:
+            pd.DataFrame: 조회된 데이터
+        """
+        if self.collection is None:
+            logger.warning("MongoDB가 설정되지 않았습니다.")
+            return pd.DataFrame()
+            
+        try:
+            query = {}
+            if start_date:
+                query["DATE"] = {"$gte": pd.to_datetime(start_date)}
+            if start_date and end_date:
+                query["DATE"] = {"$gte": pd.to_datetime(start_date), "$lte": pd.to_datetime(end_date)}
+            elif end_date:
+                query["DATE"] = {"$lte": pd.to_datetime(end_date)}
+            
+            cursor = self.collection.find(query).sort("DATE", 1)
+            if limit:
+                cursor = cursor.limit(limit)
+            
+            data = list(cursor)
+            if data:
+                df = pd.DataFrame(data)
+                # MongoDB의 _id 컬럼 제거
+                if '_id' in df.columns:
+                    df = df.drop('_id', axis=1)
+                logger.info(f"데이터 조회 완료: {len(df)}개 레코드")
+                return df
+            else:
+                logger.info("조회된 데이터가 없습니다.")
+                return pd.DataFrame()
+        except Exception as e:
+            logger.error(f"데이터 조회 중 오류: {e}")
+            return pd.DataFrame()
+    
     def close(self):
         """리소스 정리"""
         if self.session:
@@ -301,3 +414,11 @@ class SeibroClient:
         if self.mongo_client:
             self.mongo_client.close()
         logger.info("SeibroClient 리소스가 정리되었습니다.")
+    
+    def __enter__(self):
+        """컨텍스트 매니저 진입"""
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """컨텍스트 매니저 종료"""
+        self.close()

@@ -7,7 +7,7 @@ import warnings
 from datetime import datetime
 from bs4 import BeautifulSoup
 from tqdm import tqdm
-from tools.client import summarize_report
+from tools.openai_client import summarize_report
 from pymongo import MongoClient
 import pdfplumber
 import re
@@ -39,6 +39,8 @@ class NaverReportScraper:
         }
         self.report_list = []
         self.today = datetime.now().strftime("%y.%m.%d")
+        #self.today = "25.07.28"
+        print(self.today)
 
         # MongoDB 연결 초기화
         uri = os.getenv("MONGODB_URI")
