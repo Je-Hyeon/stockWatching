@@ -197,6 +197,7 @@ class KrxClient:
             return pd.DataFrame(data)
         return pd.DataFrame()
     
+    
     # ===== ETF 관련 메소드들 =====
     
     def _get_etf_list(self, trade_date=None):
